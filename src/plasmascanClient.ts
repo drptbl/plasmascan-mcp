@@ -57,6 +57,40 @@ export interface ContractLogFilter {
   readonly offset?: number;
 }
 
+export interface TransactionStatusResult {
+  readonly status: string;
+  readonly message?: string;
+}
+
+export interface TokenHolderEntry {
+  readonly holderAddress: string;
+  readonly quantity: string;
+}
+
+export interface TokenInfoResult {
+  readonly contractAddress: string;
+  readonly name?: string;
+  readonly symbol?: string;
+  readonly decimals?: string;
+  readonly totalSupply?: string;
+  readonly raw: Record<string, string>;
+}
+
+export interface TokenHoldingEntry {
+  readonly contractAddress: string;
+  readonly balance: string;
+  readonly tokenName?: string;
+  readonly tokenSymbol?: string;
+  readonly raw: Record<string, string>;
+}
+
+export interface TokenBalanceHistoryResult {
+  readonly contractAddress: string;
+  readonly accountAddress: string;
+  readonly blockNumber: number;
+  readonly balance: string;
+}
+
 export class PlasmaScanError extends Error {
   public readonly code: PlasmaScanErrorCode;
   public readonly url: string;
@@ -147,6 +181,265 @@ export class PlasmaScanClient {
     return result ?? [];
   }
 
+  public async getTransactionStatus(txHash: string): Promise<TransactionStatusResult> {
+    const hash = this.requireTxHash(txHash);
+    const result = await this.request<TransactionStatusPayload>(
+      {
+        module: "transaction",
+        action: "getstatus",
+        txhash: hash,
+      },
+      { allowZeroResult: false }
+    );
+
+    return {
+      status: result.status,
+      ...(result.message ? { message: result.message } : {}),
+    };
+  }
+
+  public async getTransactionReceiptStatus(txHash: string): Promise<TransactionStatusResult> {
+    const hash = this.requireTxHash(txHash);
+    const result = await this.request<TransactionReceiptStatusPayload>(
+      {
+        module: "transaction",
+        action: "gettxreceiptstatus",
+        txhash: hash,
+      },
+      { allowZeroResult: false }
+    );
+
+    return {
+      status: result.status,
+    };
+  }
+
+  public async getTokenSupply(contractAddress: string): Promise<{ contractAddress: string; totalSupply: string }>
+  {
+    const address = this.requireAddress(contractAddress);
+    const totalSupply = await this.request<string>(
+      {
+        module: "stats",
+        action: "tokensupply",
+        contractaddress: address,
+      },
+      { allowZeroResult: false }
+    );
+
+    return { contractAddress: address, totalSupply };
+  }
+
+  public async getTokenSupplyHistory(contractAddress: string, blockNumber: number): Promise<{ contractAddress: string; blockNumber: number; totalSupply: string }>
+  {
+    const address = this.requireAddress(contractAddress);
+    const block = this.requireBlockNumber(blockNumber);
+    const totalSupply = await this.request<string>(
+      {
+        module: "stats",
+        action: "tokensupplyhistory",
+        contractaddress: address,
+        blockno: block.toString(10),
+      },
+      { allowZeroResult: false }
+    );
+
+    return { contractAddress: address, blockNumber: block, totalSupply };
+  }
+
+  public async getTokenBalance(contractAddress: string, accountAddress: string, tag: "latest" | "earliest" | "pending" = "latest"): Promise<{ contractAddress: string; accountAddress: string; balance: string; tag: string }>
+  {
+    const tokenAddress = this.requireAddress(contractAddress);
+    const holder = this.requireAddress(accountAddress);
+    const balance = await this.request<string>(
+      {
+        module: "account",
+        action: "tokenbalance",
+        contractaddress: tokenAddress,
+        address: holder,
+        tag,
+      },
+      { allowZeroResult: false }
+    );
+
+    return { contractAddress: tokenAddress, accountAddress: holder, balance, tag };
+  }
+
+  public async getTokenBalanceHistory(contractAddress: string, accountAddress: string, blockNumber: number): Promise<TokenBalanceHistoryResult>
+  {
+    const tokenAddress = this.requireAddress(contractAddress);
+    const holder = this.requireAddress(accountAddress);
+    const block = this.requireBlockNumber(blockNumber);
+    const balance = await this.request<string>(
+      {
+        module: "account",
+        action: "tokenbalancehistory",
+        contractaddress: tokenAddress,
+        address: holder,
+        blockno: block.toString(10),
+      },
+      { allowZeroResult: false }
+    );
+
+    return {
+      contractAddress: tokenAddress,
+      accountAddress: holder,
+      blockNumber: block,
+      balance,
+    };
+  }
+
+  public async getTokenHolderList(contractAddress: string, page?: number, offset?: number): Promise<readonly TokenHolderEntry[]>
+  {
+    const address = this.requireAddress(contractAddress);
+    const params: Record<string, string> = {
+      module: "token",
+      action: "tokenholderlist",
+      contractaddress: address,
+    };
+
+    if (typeof page === "number") {
+      params.page = this.requirePositive(page).toString(10);
+    }
+
+    if (typeof offset === "number") {
+      params.offset = this.requirePositive(offset).toString(10);
+    }
+
+    const result = await this.request<TokenHolderPayload[]>(params, { allowZeroResult: true });
+
+    return (result ?? []).map((entry) => ({
+      holderAddress: entry.TokenHolderAddress,
+      quantity: entry.TokenHolderQuantity,
+    }));
+  }
+
+  public async getTokenInfo(contractAddress: string): Promise<TokenInfoResult | undefined> {
+    const address = this.requireAddress(contractAddress);
+    const result = await this.request<TokenInfoPayload[]>(
+      {
+        module: "token",
+        action: "tokeninfo",
+        contractaddress: address,
+      },
+      { allowZeroResult: true }
+    );
+
+    const [first] = result ?? [];
+    if (!first) {
+      return undefined;
+    }
+
+    const name = first.tokenName ?? first.name;
+    const symbol = first.tokenSymbol ?? first.symbol;
+
+    return {
+      contractAddress: first.contractAddress ?? address,
+      raw: first,
+      ...(name ? { name } : {}),
+      ...(symbol ? { symbol } : {}),
+      ...(first.decimals ? { decimals: first.decimals } : {}),
+      ...(first.totalSupply ? { totalSupply: first.totalSupply } : {}),
+    };
+  }
+
+  public async getAddressTokenHoldings(address: string, page?: number, offset?: number): Promise<readonly TokenHoldingEntry[]>
+  {
+    const account = this.requireAddress(address);
+    const params: Record<string, string> = {
+      module: "account",
+      action: "addresstokenbalance",
+      address: account,
+    };
+
+    if (typeof page === "number") {
+      params.page = this.requirePositive(page).toString(10);
+    }
+
+    if (typeof offset === "number") {
+      params.offset = this.requirePositive(offset).toString(10);
+    }
+
+    const result = await this.request<TokenBalancePayload[]>(params, { allowZeroResult: true });
+
+    return (result ?? []).map((entry) => {
+      const symbol = entry.tokenSymbol ?? entry.symbol;
+
+      return {
+        contractAddress: entry.contractAddress,
+        balance: entry.TokenBalance ?? entry.balance ?? "0",
+        raw: entry,
+        ...(entry.tokenName ? { tokenName: entry.tokenName } : {}),
+        ...(symbol ? { tokenSymbol: symbol } : {}),
+      };
+    });
+  }
+
+  public async getAddressNftHoldings(address: string, page?: number, offset?: number): Promise<readonly TokenHoldingEntry[]>
+  {
+    const account = this.requireAddress(address);
+    const params: Record<string, string> = {
+      module: "account",
+      action: "addresstokennftbalance",
+      address: account,
+    };
+
+    if (typeof page === "number") {
+      params.page = this.requirePositive(page).toString(10);
+    }
+
+    if (typeof offset === "number") {
+      params.offset = this.requirePositive(offset).toString(10);
+    }
+
+    const result = await this.request<TokenBalancePayload[]>(params, { allowZeroResult: true });
+
+    return (result ?? []).map((entry) => {
+      const symbol = entry.tokenSymbol ?? entry.symbol;
+
+      return {
+        contractAddress: entry.contractAddress,
+        balance: entry.TokenBalance ?? entry.balance ?? "0",
+        raw: entry,
+        ...(entry.tokenName ? { tokenName: entry.tokenName } : {}),
+        ...(symbol ? { tokenSymbol: symbol } : {}),
+      };
+    });
+  }
+
+  public async getAddressNftInventory(address: string, contractAddress: string, page?: number, offset?: number): Promise<readonly TokenHoldingEntry[]>
+  {
+    const account = this.requireAddress(address);
+    const contract = this.requireAddress(contractAddress);
+    const params: Record<string, string> = {
+      module: "account",
+      action: "addresstokennftinventory",
+      address: account,
+      contractaddress: contract,
+    };
+
+    if (typeof page === "number") {
+      params.page = this.requirePositive(page).toString(10);
+    }
+
+    if (typeof offset === "number") {
+      params.offset = this.requirePositive(offset).toString(10);
+    }
+
+    const result = await this.request<TokenBalancePayload[]>(params, { allowZeroResult: true });
+
+    return (result ?? []).map((entry) => {
+      const symbol = entry.tokenSymbol ?? entry.symbol;
+
+      return {
+        contractAddress: entry.contractAddress ?? contract,
+        balance: entry.TokenBalance ?? entry.balance ?? "0",
+        raw: entry,
+        ...(entry.tokenName ? { tokenName: entry.tokenName } : {}),
+        ...(symbol ? { tokenSymbol: symbol } : {}),
+      };
+    });
+  }
+
   public async getLogs(filter: ContractLogFilter): Promise<readonly ContractLogEntry[]> {
     const params: Record<string, string> = {
       module: "logs",
@@ -208,6 +501,31 @@ export class PlasmaScanClient {
     }
 
     return trimmed;
+  }
+
+  private requireTxHash(txHash: string): string {
+    const trimmed = txHash.trim();
+    if (!/^0x[a-fA-F0-9]{64}$/.test(trimmed)) {
+      throw new PlasmaScanError(`Invalid transaction hash: ${txHash}`, "INVALID_RESPONSE", this.config.baseUrl);
+    }
+
+    return trimmed;
+  }
+
+  private requireBlockNumber(value: number): number {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new PlasmaScanError(`Invalid block number: ${value}`, "INVALID_RESPONSE", this.config.baseUrl);
+    }
+
+    return value;
+  }
+
+  private requirePositive(value: number): number {
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new PlasmaScanError(`Value must be a positive integer: ${value}`, "INVALID_RESPONSE", this.config.baseUrl);
+    }
+
+    return value;
   }
 
   private parseAbi(rawAbi: string, address: string): unknown {
@@ -319,4 +637,29 @@ type ContractLogPayload = {
   readonly topics: readonly string[];
   readonly transactionHash: string;
   readonly transactionIndex: string;
+};
+
+type TransactionStatusPayload = {
+  readonly status: string;
+  readonly message?: string;
+};
+
+type TransactionReceiptStatusPayload = {
+  readonly status: string;
+};
+
+type TokenHolderPayload = {
+  readonly TokenHolderAddress: string;
+  readonly TokenHolderQuantity: string;
+};
+
+type TokenInfoPayload = Record<string, string>;
+
+type TokenBalancePayload = Record<string, string> & {
+  readonly contractAddress: string;
+  readonly tokenName?: string;
+  readonly tokenSymbol?: string;
+  readonly symbol?: string;
+  readonly TokenBalance?: string;
+  readonly balance?: string;
 };
