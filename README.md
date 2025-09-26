@@ -53,12 +53,22 @@ Add the server to Codex by updating `config.toml` (or the appropriate config fil
 
 ```toml
 [mcp_servers.plasmascan]
-command = "node"
-args = ["/full-path-to/plasmascan-mcp/dist/index.js"]
+command = "npx"
+args = ["plasmascan-mcp@latest"]
 env = {}
 ```
 
 Adjust the `args` path if the repository lives elsewhere or if you prefer running the TypeScript entry point (e.g., replace with `"./node_modules/.bin/tsx", "src/index.ts"`).
+
+### CLI Usage
+
+After running `npm run build`, you can launch the MCP server directly via:
+
+```bash
+npx plasmascan-mcp
+```
+
+The `npx` command invokes the package's `bin` script (`dist/index.js`), so make sure the compiled output exists.
 
 ## Tool Reference
 
